@@ -41,7 +41,7 @@ latest_records AS (
     QUALIFY
         1 = ROW_NUMBER() OVER (
             PARTITION BY {{ dbtvault.prefix([src_pk], 'a') }}
-            ORDER BY {{ dbtvault.prefix([src_eff], 'a') }} DESC
+            ORDER BY {{ dbtvault.prefix([src_eff], 'a') }} DESC, {{ dbtvault.prefix([src_ldts], 'a') }} DESC
         )
 ),
 {%- endif %}
