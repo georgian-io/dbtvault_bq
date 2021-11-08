@@ -15,5 +15,9 @@ CONCAT_WS('||', {{ dbtvault_bq.map_list(dbtvault.as_constant, columns_list) | jo
 {% endmacro %}
 
 {% macro bigquery__concat_ws(columns_list, separator) %}
+{# Usage:
+  >>> bigquery__concat_ws(["id", "!wow", "value"], "&&")
+  CONCAT(id, "&&", "wow", "&&", value)
+ #}
 CONCAT({{ dbtvault_bq.map_list(dbtvault.as_constant, columns_list) | join(', "' ~ separator ~ '", ') }})
 {% endmacro %}
