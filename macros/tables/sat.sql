@@ -40,7 +40,7 @@ WITH source_data AS (
     src_with_stale_dates_removed AS (
         SELECT {{ dbtvault.prefix(source_cols, 'stage')}}
         FROM {{ last_cte }} AS stage 
-        JOIN max_ldts_per_pk_sat AS mt
+        LEFT JOIN max_ldts_per_pk_sat AS mt
         ON {{ dbtvault.prefix([src_pk], 'mt') }} = {{ dbtvault.prefix([src_pk], 'stage') }}
         WHERE {{ dbtvault.prefix([src_ldts], 'stage') }} >= {{ dbtvault.prefix([src_ldts], 'mt') }}
             OR {{ dbtvault.prefix([src_ldts], 'mt') }} is null
