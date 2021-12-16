@@ -11,41 +11,53 @@
 {{ dbtvault.prepend_generated_by() }}
 
 WITH source_data AS (
-    SELECT *
-    FROM {{ ref(source_model) }}
-    {%- if model.config.materialized == 'vault_insert_by_period' %}
-    WHERE __PERIOD_FILTER__
-    {% endif %}
+    SELECT {{ dbtvault.prefix(source_cols, 'a', alias_target='source') }}
+    FROM {{ ref(source_model) }} AS a
+    {%- set last_cte = "source_data" %}
 ),
 
-{% if dbtvault.is_vault_insert_by_period() or is_incremental() -%}
-
-latest_sat_records_in_source AS (
-    SELECT {{ dbtvault.prefix(source_cols, 'a', alias_target='target') }}
-    FROM {{ this }} as a
-    JOIN source_data as b
-    ON a.{{ src_pk }} = b.{{ src_pk }}
-    WHERE 1 = 1
-    QUALIFY
-        1 = RANK() OVER (
-            PARTITION BY {{ dbtvault.prefix([src_pk], 'a') }}
-            ORDER BY {{ dbtvault.prefix([src_ldts], 'a') }} DESC
+{% if dbtvault.is_any_incremental() -%}
+    latest_records_in_sat AS (
+        SELECT {{ dbtvault.prefix(source_cols, 'current_records') }}
+        FROM {{ this }} AS current_records
+        WHERE 1=1
+        QUALIFY 1 = RANK() OVER (
+            PARTITION BY {{ dbtvault.prefix([src_pk], 'current_records') }}
+            ORDER BY {{ dbtvault.prefix([src_ldts], 'current_records') }} DESC
         )
-),
+    ),
 
+    max_ldts_per_pk_sat AS (
+        SELECT {{ dbtvault.prefix(source_cols, 'latest_records_in_sat') }}
+        FROM latest_records_in_sat
+        WHERE 1=1
+        QUALIFY 
+            1 = ROW_NUMBER() OVER (
+                PARTITION BY {{ dbtvault.prefix([src_pk], 'latest_records_in_sat') }}
+            ) 
+    ),
+
+    src_with_stale_dates_removed AS (
+        SELECT {{ dbtvault.prefix(source_cols, 'stage')}}
+        FROM {{ last_cte }} AS stage 
+        LEFT JOIN max_ldts_per_pk_sat AS mt
+        ON {{ dbtvault.prefix([src_pk], 'mt') }} = {{ dbtvault.prefix([src_pk], 'stage') }}
+        WHERE {{ dbtvault.prefix([src_ldts], 'stage') }} >= {{ dbtvault.prefix([src_ldts], 'mt') }}
+            OR {{ dbtvault.prefix([src_ldts], 'mt') }} is null
+    ),
+
+    {%- set last_cte = "src_with_stale_dates_removed" %}
 {% endif -%}
 
 records_to_insert AS (
-    SELECT DISTINCT {{ dbtvault.alias_all(source_cols, 'c') }}
-    FROM source_data AS c
-    {% if dbtvault.is_vault_insert_by_period() or is_incremental() -%}
-    LEFT JOIN
-        latest_sat_records_in_source
-    ON
-        {{ dbtvault.prefix([src_hashdiff], 'latest_sat_records_in_source', alias_target='target') }} = {{ dbtvault.prefix([src_hashdiff], 'c') }}
-    WHERE
-        {{ dbtvault.prefix([src_hashdiff], 'latest_sat_records_in_source', alias_target='target') }} IS NULL
-    {% endif %}
+    SELECT DISTINCT {{ dbtvault.alias_all(source_cols, 'stage') }}
+    FROM {{ last_cte }} AS stage
+    {%- if dbtvault.is_any_incremental() %}
+    LEFT JOIN latest_records_in_sat
+    ON {{ dbtvault.prefix([src_pk], 'latest_records_in_sat') }} = {{ dbtvault.prefix([src_pk], 'stage') }} 
+        AND {{ dbtvault.prefix([src_hashdiff], 'latest_records_in_sat') }} = {{ dbtvault.prefix([src_hashdiff], 'stage') }}
+    WHERE {{ dbtvault.prefix([src_hashdiff], 'latest_records_in_sat') }} IS NULL
+    {%- endif %}
 )
 
 SELECT * FROM records_to_insert
